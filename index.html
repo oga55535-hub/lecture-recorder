@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f2937">
+<title>강의 받아쓰기</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1f2328; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --rec: #dc2626; --interim: #9ca3af;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111315; --card: #1b1e21; --text: #e8eaed; --muted: #9aa0a6;
+      --line: #2c3035; --accent: #60a5fa; --rec: #f87171; --interim: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  header {
+    padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  #timer { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  #dot.on { background: var(--rec); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  #status { padding: 6px 16px; font-size: 13px; color: var(--muted); min-height: 30px; }
+  #status.warn { color: var(--rec); }
+  #title {
+    margin: 0 16px 8px; padding: 8px 10px; font-size: 15px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  #source { margin: 0 16px 6px; display: flex; gap: 6px; }
+  #source label {
+    flex: 1; text-align: center; padding: 8px 4px; font-size: 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); cursor: pointer; user-select: none;
+  }
+  #source input { display: none; }
+  #source label:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #source label.off { opacity: .4; cursor: default; }
+  #sourceHint { margin: 0 16px 8px; font-size: 12px; color: var(--muted); }
+  main {
+    flex: 1; overflow-y: auto; padding: 12px 16px 24px; margin: 0 16px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .seg { margin: 0 0 10px; }
+  .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .interim { color: var(--interim); }
+  #empty { color: var(--muted); text-align: center; margin-top: 40px; }
+  .controls { padding: 12px 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1 1 auto; min-height: 48px; padding: 0 14px; font-size: 16px; font-weight: 600;
+    border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    cursor: pointer;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  #startBtn { background: var(--rec); color: #fff; border-color: transparent; flex-basis: 100%; }
+  #startBtn.stop { background: var(--text); color: var(--bg); }
+  #saves { padding: 0 16px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  #saves button { min-height: 42px; font-size: 14px; font-weight: 500; }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot"></span>
+  <h1>강의 받아쓰기</h1>
+  <span id="timer">00:00:00</span>
+</header>
+<div id="status">녹음 시작을 누르면 녹음과 받아쓰기가 함께 시작돼요.</div>
+<input id="title" placeholder="강의 제목 (파일 이름에 쓰여요)" autocomplete="off">
+<div id="source">
+  <label><input type="radio" name="src" value="mic" checked>바깥 소리</label>
+  <label><input type="radio" name="src" value="system">기기 소리</label>
+  <label><input type="radio" name="src" value="both">둘 다</label>
+</div>
+<p id="sourceHint"></p>
+<main id="log"><p id="empty">받아쓴 내용이 여기에 표시돼요.</p></main>
+<div class="controls">
+  <button id="startBtn">● 녹음 시작</button>
+  <button id="pauseBtn" disabled>일시정지</button>
+</div>
+<div id="saves">
+  <button id="saveAudioBtn" disabled>녹음 파일 저장</button>
+  <button id="saveTextBtn" disabled>받아쓰기 저장</button>
+  <button id="copyBtn" disabled>복사</button>
+  <button id="clearBtn">새로 시작</button>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log'), statusEl = $('status'), timerEl = $('timer'), dot = $('dot');
+  const startBtn = $('startBtn'), pauseBtn = $('pauseBtn');
+  const saveAudioBtn = $('saveAudioBtn'), saveTextBtn = $('saveTextBtn'), copyBtn = $('copyBtn');
+  const STORE_KEY = 'lecture-recorder-v1';
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  let state = 'idle';            // idle | recording | paused | stopped
+  let stream = null, recorder = null, chunks = [], audioBlob = null, audioExt = 'webm';
+  let inputStreams = [], audioCtx = null;   // everything to shut down when recording ends
+  let recog = null, recogWanted = false, recogFails = 0, recogTrack = null;
+
+  // Browsers only let web pages capture device audio on desktop (screen/tab share).
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const canSystem = !!navigator.mediaDevices?.getDisplayMedia && !isMobile;
+  const source = () => document.querySelector('input[name=src]:checked').value;
+  let segments = [];             // { t: seconds, text }
+  let interimEl = null, interimStart = null;
+  let elapsedBefore = 0, runStartedAt = 0, tick = null, wakeLock = null;
+
+  // ---------- time ----------
+  const elapsed = () => elapsedBefore + (state === 'recording' ? (Date.now() - runStartedAt) / 1000 : 0);
+  const fmt = (s) => {
+    s = Math.floor(s);
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return [h, m, x].map(n => String(n).padStart(2, '0')).join(':');
+  };
+  const updateTimer = () => { timerEl.textContent = fmt(elapsed()); };
+
+  const setStatus = (msg, warn) => { statusEl.textContent = msg; statusEl.className = warn ? 'warn' : ''; };
+
+  // ---------- transcript rendering ----------
+  function addSegment(t, text) {
+    text = text.trim();
+    if (!text) return;
+    segments.push({ t, text });
+    const p = document.createElement('p');
+    p.className = 'seg';
+    const ts = document.createElement('span');
+    ts.className = 't'; ts.textContent = fmt(t);
+    p.append(ts, document.createTextNode(text));
+    if (interimEl) logEl.insertBefore(p, interimEl); else logEl.append(p);
+    $('empty')?.remove();
+    persist();
+    scrollDown();
+    refreshButtons();
+  }
+  function setInterim(text) {
+    if (!text) { interimEl?.remove(); interimEl = null; return; }
+    if (!interimEl) {
+      interimEl = document.createElement('p');
+      interimEl.className = 'seg interim';
+      logEl.append(interimEl);
+      $('empty')?.remove();
+    }
+    interimEl.textContent = text;
+    scrollDown();
+  }
+  function scrollDown() {
+    const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120;
+    if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+  const transcriptText = () => {
+    const title = $('title').value.trim();
+    const head = title ? title + '\n\n' : '';
+    return head + segments.map(s => `[${fmt(s.t)}] ${s.text}`).join('\n');
+  };
+
+  // Transcript survives a page reload / crash; the audio does not.
+  function persist() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ title: $('title').value, segments })); } catch {}
+  }
+  function restore() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+      if (!saved?.segments?.length) return;
+      $('title').value = saved.title || '';
+      saved.segments.forEach(s => addSegment(s.t, s.text));
+      elapsedBefore = saved.segments[saved.segments.length - 1].t;
+      updateTimer();
+      setStatus('지난번 받아쓰기를 불러왔어요. 이어서 녹음하거나 "새로 시작"을 눌러 주세요.');
+    } catch {}
+  }
+
+  // ---------- speech recognition ----------
+  function startRecognition() {
+    if (!SR) return;
+    recogWanted = true;
+    recog = new SR();
+    recog.lang = 'ko-KR';
+    recog.continuous = true;
+    recog.interimResults = true;
+
+    recog.onresult = (e) => {
+      recogFails = 0;
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (interimStart === null) interimStart = elapsed();
+        if (r.isFinal) {
+          addSegment(interimStart, r[0].transcript);
+          interimStart = null;
+        } else {
+          interim += r[0].transcript;
+        }
+      }
+      setInterim(interim);
+    };
+    recog.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        recogWanted = false;
+        setStatus('음성 인식 권한이 거부됐어요. 녹음은 계속되고 있어요. (설정에서 마이크/음성 인식 허용)', true);
+      } else if (e.error === 'network') {
+        setStatus('인터넷 연결이 불안정해서 받아쓰기가 끊겼어요. 녹음은 계속되고 있어요.', true);
+      }
+      // 'no-speech' / 'aborted' are routine — onend restarts.
+    };
+    recog.onend = () => {
+      // Browsers end recognition after silence or ~1 min; keep it going while recording.
+      if (interimEl && interimEl.textContent) {
+        addSegment(interimStart ?? elapsed(), interimEl.textContent);
+      }
+      interimStart = null;
+      setInterim('');
+      if (recogWanted && state === 'recording') {
+        recogFails++;
+        setTimeout(() => {
+          if (!recogWanted || state !== 'recording') return;
+          try { startRecognition(); } catch {}
+        }, Math.min(250 * recogFails, 3000));
+      }
+    };
+    // Recent Chrome can transcribe a given audio track (device sound); otherwise it uses the mic.
+    if (recogTrack) {
+      try { recog.start(recogTrack); return; } catch {}
+    }
+    try { recog.start(); } catch {}
+  }
+  function stopRecognition() {
+    recogWanted = false;
+    try { recog?.stop(); } catch {}
+  }
+
+  // ---------- recording ----------
+  function pickMime() {
+    if (!window.MediaRecorder) return '';
+    const options = [
+      ['audio/webm;codecs=opus', 'webm'],
+      ['audio/mp4', 'm4a'],
+      ['audio/webm', 'webm'],
+    ];
+    for (const [m, ext] of options) {
+      if (MediaRecorder.isTypeSupported(m)) { audioExt = ext; return m; }
+    }
+    return '';
+  }
+
+  const getMic = () => navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true }
+  });
+  async function getSystem() {
+    // Chrome requires a video track for screen share; only its audio is recorded.
+    const ds = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: 'include',
+      selfBrowserSurface: 'exclude',
+    });
+    if (!ds.getAudioTracks().length) {
+      ds.getTracks().forEach(t => t.stop());
+      throw new Error('no-audio');
+    }
+    return ds;
+  }
+  function cleanupInputs() {
+    inputStreams.forEach(s => s.getTracks().forEach(t => t.stop()));
+    inputStreams = [];
+    try { audioCtx?.close(); } catch {}
+    audioCtx = null;
+  }
+
+  async function start() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('이 브라우저에서는 녹음을 할 수 없어요. 크롬, 엣지, 사파리에서 열어 주세요.', true);
+      return;
+    }
+    const src = source();
+    let mic = null, sys = null;
+    try {
+      if (src !== 'mic') {
+        setStatus('공유 창에서 "전체 화면" 또는 소리가 나는 탭을 고르고, 아래쪽 "오디오 공유"를 꼭 켜 주세요.');
+        sys = await getSystem();
+        inputStreams.push(sys);
+      }
+      if (src !== 'system') {
+        mic = await getMic();
+        inputStreams.push(mic);
+      }
+    } catch (err) {
+      cleanupInputs();
+      if (err?.message === 'no-audio') {
+        setStatus('기기 소리가 공유되지 않았어요. 다시 시작해서 공유 창의 "오디오 공유"(시스템 오디오 공유)를 켜 주세요.', true);
+      } else if (src !== 'mic' && !mic && err?.name === 'NotAllowedError') {
+        setStatus('화면 공유가 취소됐어요. 기기 소리를 녹음하려면 공유를 허용해 주세요.', true);
+      } else {
+        setStatus('마이크를 쓸 수 없어요. 브라우저에서 마이크 권한을 허용해 주세요.', true);
+      }
+      return;
+    }
+
+    if (src === 'mic') {
+      stream = mic;
+      recogTrack = null;
+    } else if (src === 'system') {
+      stream = new MediaStream(sys.getAudioTracks());
+      recogTrack = stream.getAudioTracks()[0];
+    } else {
+      // Mix mic + device sound into one track.
+      audioCtx = new AudioContext();
+      try { await audioCtx.resume(); } catch {}
+      const dest = audioCtx.createMediaStreamDestination();
+      audioCtx.createMediaStreamSource(new MediaStream(sys.getAudioTracks())).connect(dest);
+      audioCtx.createMediaStreamSource(mic).connect(dest);
+      stream = dest.stream;
+      recogTrack = stream.getAudioTracks()[0];
+    }
+    // Clicking the browser's "공유 중지" ends the device-sound track: finish the recording.
+    sys?.getAudioTracks()[0].addEventListener('ended', () => {
+      if (state === 'recording' || state === 'paused') stop();
+    });
+    const mime = pickMime();
+    chunks = []; audioBlob = null;
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      audioBlob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
+      cleanupInputs();
+      refreshButtons();
+      setStatus('녹음이 끝났어요. "녹음 파일 저장"과 "받아쓰기 저장"으로 파일을 꼭 저장해 주세요.');
+    };
+    recorder.start(1000);
+
+    state = 'recording';
+    runStartedAt = Date.now();
+    tick = setInterval(updateTimer, 500);
+    startRecognition();
+    keepAwake();
+    setStatus(SR
+      ? '녹음 중 · 실시간 받아쓰기 중'
+      : '녹음 중 · 이 브라우저는 실시간 받아쓰기를 지원하지 않아요 (녹음만 돼요)', !SR);
+    refreshButtons();
+  }
+
+  function pause() {
+    if (state === 'recording') {
+      elapsedBefore = elapsed();
+      state = 'paused';
+      recorder.pause();
+      stopRecognition();
+      setStatus('일시정지됨');
+    } else if (state === 'paused') {
+      state = 'recording';
+      runStartedAt = Date.now();
+      recorder.resume();
+      startRecognition();
+      setStatus('녹음 중 · 실시간 받아쓰기 중');
+    }
+    refreshButtons();
+  }
+
+  function stop() {
+    elapsedBefore = elapsed();
+    state = 'stopped';
+    clearInterval(tick);
+    stopRecognition();
+    try { recorder?.stop(); } catch {}
+    releaseAwake();
+    refreshButtons();
+  }
+
+  // Keep the phone screen on while recording; iOS stops the mic when the screen locks.
+  async function keepAwake() {
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  }
+  function releaseAwake() { try { wakeLock?.release(); } catch {} wakeLock = null; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state === 'recording') {
+      keepAwake();
+      if (recogWanted) { try { recog?.start(); } catch {} }
+    } else if (document.visibilityState === 'hidden' && state === 'recording') {
+      setStatus('화면을 벗어나면 받아쓰기가 멈출 수 있어요. 이 화면을 켜 둔 채로 두세요.', true);
+    }
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (state === 'recording' || state === 'paused' || (audioBlob && !audioSaved)) {
+      e.preventDefault(); e.returnValue = '';
+    }
+  });
+
+  // ---------- saving ----------
+  let audioSaved = false;
+  const baseName = () => {
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}_${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    const title = $('title').value.trim().replace(/[\\/:*?"<>|]/g, '');
+    return title ? `${title}_${stamp}` : `강의_${stamp}`;
+  };
+  function download(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  saveAudioBtn.onclick = () => {
+    if (!audioBlob) return;
+    download(audioBlob, `${baseName()}.${audioExt}`);
+    audioSaved = true;
+  };
+  saveTextBtn.onclick = () => {
+    download(new Blob(['﻿' + transcriptText()], { type: 'text/plain;charset=utf-8' }), `${baseName()}.txt`);
+  };
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(transcriptText());
+      setStatus('받아쓴 내용을 복사했어요.');
+    } catch { setStatus('복사하지 못했어요. "받아쓰기 저장"을 이용해 주세요.', true); }
+  };
+  $('clearBtn').onclick = () => {
+    if (state === 'recording' || state === 'paused') return;
+    if (segments.length && !confirm('받아쓴 내용을 지우고 새로 시작할까요?')) return;
+    segments = []; audioBlob = null; audioSaved = false; elapsedBefore = 0;
+    logEl.innerHTML = '<p id="empty">받아쓴 내용이 여기에 표시돼요.</p>';
+    interimEl = null;
+    state = 'idle';
+    updateTimer(); persist(); refreshButtons();
+    setStatus('녹음 시작을 누르면 녹음과 받아쓰기가 함께 시작돼요.');
+  };
+  $('title').addEventListener('input', persist);
+
+  startBtn.onclick = () => (state === 'recording' || state === 'paused') ? stop() : start();
+  pauseBtn.onclick = pause;
+
+  function refreshButtons() {
+    const live = state === 'recording' || state === 'paused';
+    startBtn.textContent = live ? '■ 녹음 종료' : '● 녹음 시작';
+    startBtn.classList.toggle('stop', live);
+    pauseBtn.disabled = !live;
+    pauseBtn.textContent = state === 'paused' ? '다시 시작' : '일시정지';
+    saveAudioBtn.disabled = !audioBlob;
+    saveTextBtn.disabled = copyBtn.disabled = !segments.length;
+    $('clearBtn').disabled = live;
+    dot.classList.toggle('on', state === 'recording');
+    document.querySelectorAll('input[name=src]').forEach(r => {
+      const blocked = !canSystem && r.value !== 'mic';
+      r.disabled = live || blocked;
+      r.parentElement.classList.toggle('off', r.disabled);
+    });
+  }
+
+  function updateSourceHint() {
+    const hint = $('sourceHint');
+    if (!canSystem) {
+      hint.textContent = isMobile
+        ? '휴대폰 브라우저는 기기 소리 녹음을 지원하지 않아 바깥 소리(마이크)만 녹음돼요.'
+        : '이 브라우저는 기기 소리 녹음을 지원하지 않아요. PC 크롬에서 열어 주세요.';
+      return;
+    }
+    hint.textContent = {
+      mic: '마이크로 들리는 소리를 녹음해요. (강의실 수업)',
+      system: '컴퓨터에서 나오는 소리를 녹음해요. (인강, 줌 수업) 시작할 때 "오디오 공유"를 켜 주세요.',
+      both: '컴퓨터 소리와 내 목소리를 함께 녹음해요. (줌에서 질문할 때) 이어폰을 쓰면 소리가 울리지 않아요.',
+    }[source()];
+  }
+  document.querySelectorAll('input[name=src]').forEach(r => r.addEventListener('change', updateSourceHint));
+  updateSourceHint();
+
+  if (!SR) setStatus('이 브라우저는 실시간 받아쓰기를 지원하지 않아요. 크롬/엣지(PC) 또는 사파리(아이폰)에서 열어 주세요.', true);
+  restore();
+  refreshButtons();
+})();
+</script>
+</body>
+</html>
