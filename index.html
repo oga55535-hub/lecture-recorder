@@ -40,13 +40,13 @@
     margin: 0 16px 8px; padding: 8px 10px; font-size: 15px; border-radius: 8px;
     border: 1px solid var(--line); background: var(--card); color: var(--text);
   }
-  #source { margin: 0 16px 6px; display: flex; gap: 6px; }
-  #source label {
+  #source, #lang { margin: 0 16px 6px; display: flex; gap: 6px; }
+  #source label, #lang label {
     flex: 1; text-align: center; padding: 8px 4px; font-size: 14px; border-radius: 8px;
     border: 1px solid var(--line); background: var(--card); cursor: pointer; user-select: none;
   }
-  #source input { display: none; }
-  #source label:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #source input, #lang input { display: none; }
+  #source label:has(input:checked), #lang label:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   #source label.off { opacity: .4; cursor: default; }
   #sourceHint { margin: 0 16px 8px; font-size: 12px; color: var(--muted); }
   main {
@@ -84,6 +84,12 @@
   <label><input type="radio" name="src" value="both">둘 다</label>
 </div>
 <p id="sourceHint"></p>
+<div id="lang">
+  <label><input type="radio" name="lang" value="ko-KR" checked>한국어</label>
+  <label><input type="radio" name="lang" value="en-US">English</label>
+  <label><input type="radio" name="lang" value="zh-CN">中文</label>
+</div>
+<p id="langHint" style="margin:0 16px 8px;font-size:12px;color:var(--muted)">받아쓸 언어예요. 녹음 중에도 바로 바꿀 수 있어요.</p>
 <main id="log"><p id="empty">받아쓴 내용이 여기에 표시돼요.</p></main>
 <div class="controls">
   <button id="startBtn">● 녹음 시작</button>
@@ -189,7 +195,7 @@
     if (!SR) return;
     recogWanted = true;
     recog = new SR();
-    recog.lang = 'ko-KR';
+    recog.lang = document.querySelector('input[name=lang]:checked').value;
     recog.continuous = true;
     recog.interimResults = true;
 
@@ -476,6 +482,19 @@
   }
   document.querySelectorAll('input[name=src]').forEach(r => r.addEventListener('change', updateSourceHint));
   updateSourceHint();
+
+  // Language: remembered per device, switchable mid-recording.
+  const LANG_KEY = 'lecture-recorder-lang';
+  try {
+    const savedLang = localStorage.getItem(LANG_KEY);
+    const r = savedLang && document.querySelector(`input[name=lang][value="${savedLang}"]`);
+    if (r) r.checked = true;
+  } catch {}
+  document.querySelectorAll('input[name=lang]').forEach(r => r.addEventListener('change', () => {
+    try { localStorage.setItem(LANG_KEY, r.value); } catch {}
+    // Ending the current session makes onend restart it with the new language.
+    if (state === 'recording' && recogWanted) { try { recog?.stop(); } catch {} }
+  }));
 
   if (!SR) setStatus('이 브라우저는 실시간 받아쓰기를 지원하지 않아요. 크롬/엣지(PC) 또는 사파리(아이폰)에서 열어 주세요.', true);
   restore();
